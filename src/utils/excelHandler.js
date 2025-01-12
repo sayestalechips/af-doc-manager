@@ -24,33 +24,11 @@ export class ExcelHandler {
      */
     static async writeExcelFile(data, outputPath) {
         try {
-            // Create workbook and worksheet
+            // No content processing here - it's already done in index.js
             const wb = XLSX.utils.book_new();
-            const ws = XLSX.utils.json_to_sheet(data, {
-                header: [
-                    'Document Name',
-                    'Title',
-                    'Description ',
-                    'Link ',
-                    'Classification ',
-                    'Original Link',
-                    'New URL',
-                    'Full Content',
-                    'Summary',
-                    'Key Points',
-                    'Processing Status',
-                    'Last Updated',
-                    'Content Length',
-                    'Language',
-                    'Source',
-                    'PDF Page Count'
-                ]
-            });
-
-            // Add worksheet to workbook
+            const ws = XLSX.utils.json_to_sheet(data);
             XLSX.utils.book_append_sheet(wb, ws, 'Updated Documents');
 
-            // Write to file using Node's fs
             const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
             await writeFile(outputPath, buffer);
             

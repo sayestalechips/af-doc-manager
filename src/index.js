@@ -63,8 +63,11 @@ export default class AFDocManager {
                 
                 results.push({
                     documentName: doc['Document Name'],
-                    ...result  // This now includes success, error, url, content, metadata
+                    ...result
                 });
+                
+                // Add delay between API calls
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 
             } catch (error) {
                 console.error(`Error processing document ${doc['Document Name']}:`, error);
@@ -92,27 +95,49 @@ export default class AFDocManager {
                     ...doc,
                     'Processing Status': 'Failed',
                     'Error': result?.error || 'Unknown error',
-                    'Last Checked': new Date().toISOString()
+                    'Last Updated': new Date().toISOString()
                 };
             }
 
-            // Extract key sections from content
-            const sections = this._extractSections(result.content);
+            // Split the content into smaller chunks
+            const contentStr = String(result.content || '');
+            const CHUNK_SIZE = 15000; // Reduced further for Excel's limits
+            const chunks = [];
+            
+            // Split content and ensure each chunk is within Excel's limits
+            for (let i = 0; i < contentStr.length; i += CHUNK_SIZE) {
+                const chunk = contentStr.slice(i, i + CHUNK_SIZE);
+                // Ensure we don't cut in the middle of a word
+                const lastSpace = chunk.lastIndexOf(' ');
+                chunks.push(chunk.slice(0, lastSpace));
+                
+                // Add the remainder to the next chunk
+                if (lastSpace < chunk.length) {
+                    i -= (chunk.length - lastSpace);
+                }
+            }
+
+            // Create a new object without the original content field
+            const baseDoc = { ...doc };
+            delete baseDoc.content;
 
             return {
-                ...doc,
-                'Link': result.newUrl,
-                'Original Link': doc.Link,
-                'Title': sections.title || result.metadata?.title || '',
-                'Summary': sections.summary || '',
-                'Key Points': sections.keyPoints || '',
-                'Full Content': result.content,  // Keep full content but in separate column
+                ...baseDoc,
+                'URL': result.newUrl,
+                'Original URL': doc.Link,
+                'Title': result.metadata?.title || '',
+                'Summary': chunks[0]?.slice(0, 1000) || '',
+                'Content_': chunks[0] || '',
+                'Content_2': chunks[1] || '',
+                'Content_3': chunks[2] || '',
+                'Content_4': chunks[3] || '',
+                'Content_5': chunks[4] || '',
                 'Processing Status': 'Success',
                 'Last Updated': new Date().toISOString(),
-                'Content Length': result.content?.length || 0,
+                'Content Length': contentStr.length,
+                'Total Chunks': chunks.length,
                 'Language': result.metadata?.language || 'en',
-                'Source': result.metadata?.source || '',
-                'PDF Page Count': result.metadata?.pdfMetadata?.pageCount || ''
+                'Source': result.metadata?.source || ''
             };
         });
     }
