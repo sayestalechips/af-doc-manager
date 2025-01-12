@@ -1,0 +1,21 @@
+# Node.js Dependencies
+xlsx@0.18.5
+lodash@4.17.21
+papaparse@5.3.2
+firecrawl@1.0.0
+dotenv@16.0.3
+
+# Installation Commands
+# Run these commands in order:
+
+# 1. Initialize new npm project if starting fresh
+npm init -y
+
+# 2. Install all dependencies
+npm install xlsx lodash papaparse firecrawl dotenv
+
+# 3. Optional development dependencies for testing
+npm install --save-dev jest
+
+# Note: Make sure Node.js (v14 or higher) is installed
+# Check version with: node --version
