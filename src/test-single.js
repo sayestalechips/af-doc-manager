@@ -20,19 +20,19 @@ async function testSingleRow() {
         const fileContent = await readFile('RAMJET CLIN 12.xlsx');
         const documents = ExcelHandler.readExcelFile(fileContent);
 
-        // Take just the first row for testing
-        const singleRowData = [documents[0]];
-        
-        console.log('\nSearching for document:', {
-            name: singleRowData[0]['Document Name'],
-            title: singleRowData[0]['Title']
-        });
+        // Take first 5 rows for testing
+        const testRows = documents.slice(0, 5);
+
+        console.log('\nSearching for documents:', testRows.map(doc => ({
+            name: doc['Document Name'],
+            title: doc['Title']
+        })));
 
         // Initialize AFDocManager with BOTH API keys
         const manager = new AFDocManager({
             firecrawlApiKey: process.env.FIRECRAWL_API_KEY,
             braveApiKey: process.env.BRAVE_API_KEY,
-            batchSize: 1,
+            batchSize: 5,
             retryAttempts: 3
         });
 
@@ -41,65 +41,82 @@ async function testSingleRow() {
         console.log('Known working URL format:', 'https://www.e-publishing.af.mil/Portals/1/Documents/TQ%20Template%20User%20Guide%20v20201208.1.pdf');
         
         // Process the single document - ignore Excel's URL
-        const result = await manager._processBatch(singleRowData.map(doc => ({
+        const results = await manager._processBatch(testRows.map(doc => ({
             ...doc,
             'Link ': undefined
         })));
         
-        // Log the URL that Brave found
-        if (result && result.length > 0) {
-            try {
-                const outputPath = 'test-output.xlsx';
-                const updatedData = manager._prepareExcelUpdate(singleRowData, result);
-                
-                // Super detailed debug logging
-                console.log('\nContent Analysis:', {
-                    original: {
-                        length: result[0].content?.length,
-                        sample: result[0].content?.substring(0, 100) + '...'
-                    },
-                    chunks: {
-                        part1: {
-                            length: updatedData[0]['Content_Part1']?.length || 0,
-                            sample: updatedData[0]['Content_Part1']?.substring(0, 100) + '...'
-                        },
-                        part2: {
-                            length: updatedData[0]['Content_Part2']?.length || 0,
-                            sample: updatedData[0]['Content_Part2']?.substring(0, 100) + '...'
-                        }
-                    },
-                    metadata: {
-                        totalChunks: updatedData[0]['Total Chunks'],
-                        contentLength: updatedData[0]['Content Length']
-                    },
-                    columns: Object.keys(updatedData[0])
+        // Analyze results
+        const analysis = results.reduce((acc, result, index) => {
+            const docName = testRows[index]['Document Name'];
+            
+            if (result.success) {
+                acc.successful.push({
+                    docName,
+                    url: result.url,
+                    hasContent: !!result.content
                 });
-
-                // Log the first row data before writing
-                console.log('\nFirst Row Data:', {
-                    documentName: updatedData[0]['Document Name'],
-                    title: updatedData[0]['Title'],
-                    url: updatedData[0]['URL'],
-                    status: updatedData[0]['Processing Status'],
-                    contentFields: Object.keys(updatedData[0]).filter(k => k.includes('Content'))
-                });
-                
-                await ExcelHandler.writeExcelFile(updatedData, outputPath);
-                console.log(`\n✅ Excel file saved to ${outputPath}`);
-            } catch (error) {
-                console.error('\n❌ Excel Save Error:', error);
-                console.error('\nError Context:', {
-                    hasResult: !!result,
-                    resultLength: result?.length,
-                    hasContent: !!result[0]?.content,
-                    contentType: typeof result[0]?.content,
-                    firstChunkLength: result[0]?.content?.substring(0, 25000)?.length
+            } else {
+                acc.failed.push({
+                    docName,
+                    error: result.error
                 });
             }
-        }
+            return acc;
+        }, { successful: [], failed: [] });
+
+        // Log analysis
+        console.log('\n📊 Results Analysis:');
+        console.log(`Total documents processed: ${results.length}`);
+        console.log(`✅ Successful URL finds: ${analysis.successful.length}`);
+        console.log(`❌ Failed attempts: ${analysis.failed.length}`);
         
-        console.log('\nProcessing Result:', JSON.stringify(result, null, 2));
-        
+        console.log('\nSuccessful documents:');
+        analysis.successful.forEach(doc => {
+            console.log(`- ${doc.docName}: ${doc.url} (Content extracted: ${doc.hasContent})`);
+        });
+
+        console.log('\nFailed documents:');
+        analysis.failed.forEach(doc => {
+            console.log(`- ${doc.docName}: ${doc.error}`);
+        });
+
+        // Prepare Excel data - now including URLs even without content
+        const updatedData = testRows.map((row, index) => {
+            const result = results[index];
+            return {
+                'Document Name': row['Document Name'],
+                'Title': row['Title'],
+                'Attempted URL': result.url || '',
+                'Final URL': result.newUrl || result.url || '',
+                'Status': result.error ? `Error: ${result.error}` : (result.success ? 'Success' : 'Unknown'),
+                'Content': result.content || '',
+                'Total Content Length': result.content?.length || 0,
+                'Scrape Timestamp': new Date().toISOString(),
+                'Metadata': JSON.stringify(result.metadata || {}),
+                
+                // Debug info
+                'Success': result.success ? 'Yes' : 'No',
+                'Error': result.error || '',
+                'Content Parts': result.metadata?.chunks || 0
+            };
+        });
+
+        // Add debug logging
+        console.log('\n📝 Data being sent to Excel:', 
+            updatedData.map(row => ({
+                document: row['Document Name'],
+                attemptedUrl: row['Attempted URL'],
+                finalUrl: row['Final URL'],
+                contentLength: row['Total Content Length'],
+                status: row['Status']
+            }))
+        );
+
+        // Save to Excel
+        await ExcelHandler.writeExcelFile(updatedData, 'test-output.xlsx');
+        console.log('\n✅ Excel file saved with URLs and status updates');
+
     } catch (error) {
         console.error('Test failed:', error);
         if (error.code === 'ENOENT') {

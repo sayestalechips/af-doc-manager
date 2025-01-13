@@ -1,9 +1,14 @@
 import { ExcelHandler } from './utils/excelHandler.js';
 import { UrlFinder } from './services/urlFinder.js';
+import { EXCEL_SCHEMA, CONSTANTS } from './constants.js';
 
 export default class AFDocManager {
     constructor(config) {
-        this.urlFinder = new UrlFinder(config.firecrawlApiKey, config.braveApiKey);
+        this.urlFinder = new UrlFinder(
+            config.firecrawlApiKey, 
+            config.braveApiKey,
+            config.openaiApiKey
+        );
         this.batchSize = config.batchSize || 10;
         this.retryAttempts = config.retryAttempts || 3;
     }
@@ -35,7 +40,7 @@ export default class AFDocManager {
             }
 
             // Update Excel with results
-            const updatedData = this._prepareExcelUpdate(documents, results);
+            const updatedData = this._prepareExcelUpdate(results);
             await ExcelHandler.writeExcelFile(updatedData, outputPath);
 
             return {
@@ -59,25 +64,47 @@ export default class AFDocManager {
         
         for (const doc of documents) {
             try {
+                console.log('\n🔄 Processing batch document:', doc[EXCEL_SCHEMA.DOCUMENT_NAME]);
+                
                 const result = await this.urlFinder.findUrlAndExtractContent(doc);
-                
-                results.push({
-                    documentName: doc['Document Name'],
-                    ...result
+                console.log('📦 URL Finder returned:', {
+                    document: result[EXCEL_SCHEMA.DOCUMENT_NAME],
+                    url: result[EXCEL_SCHEMA.URL],
+                    status: result[EXCEL_SCHEMA.STATUS],
+                    contentLength: result[EXCEL_SCHEMA.TOTAL_LENGTH],
+                    hasContent: !!result[EXCEL_SCHEMA.CONTENT_PARTS[0]]
                 });
+
+                // Test Excel writing with this result
+                await ExcelHandler.writeTestFile(result, 'bananas.xlsx');
                 
-                // Add delay between API calls
+                results.push(result);
+                
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 
             } catch (error) {
-                console.error(`Error processing document ${doc['Document Name']}:`, error);
+                console.error(`Error processing document ${doc[EXCEL_SCHEMA.DOCUMENT_NAME]}:`, error);
                 results.push({
-                    documentName: doc['Document Name'],
-                    success: false,
-                    error: error.message
+                    [EXCEL_SCHEMA.DOCUMENT_NAME]: doc[EXCEL_SCHEMA.DOCUMENT_NAME],
+                    [EXCEL_SCHEMA.TITLE]: doc[EXCEL_SCHEMA.TITLE],
+                    [EXCEL_SCHEMA.URL]: null,
+                    [EXCEL_SCHEMA.STATUS]: `${CONSTANTS.ERROR_STATUS_PREFIX}${error.message}`,
+                    ...EXCEL_SCHEMA.CONTENT_PARTS.reduce((acc, part) => {
+                        acc[part] = '';
+                        return acc;
+                    }, {}),
+                    [EXCEL_SCHEMA.TOTAL_LENGTH]: 0,
+                    [EXCEL_SCHEMA.LANGUAGE]: 'en',
+                    [EXCEL_SCHEMA.SOURCE_URL]: null
                 });
             }
         }
+
+        console.log('\n📊 Batch Results Summary:', results.map(r => ({
+            document: r[EXCEL_SCHEMA.DOCUMENT_NAME],
+            status: r[EXCEL_SCHEMA.STATUS],
+            contentLength: r[EXCEL_SCHEMA.TOTAL_LENGTH]
+        })));
 
         return results;
     }
@@ -86,60 +113,23 @@ export default class AFDocManager {
      * Prepare data for Excel update
      * @private
      */
-    _prepareExcelUpdate(originalDocs, results) {
-        return originalDocs.map(doc => {
-            const result = results.find(r => r.documentName === doc['Document Name']);
-            
-            if (!result || !result.success) {
-                return {
-                    ...doc,
-                    'Processing Status': 'Failed',
-                    'Error': result?.error || 'Unknown error',
-                    'Last Updated': new Date().toISOString()
-                };
-            }
-
-            // Split the content into smaller chunks
-            const contentStr = String(result.content || '');
-            const CHUNK_SIZE = 15000; // Reduced further for Excel's limits
-            const chunks = [];
-            
-            // Split content and ensure each chunk is within Excel's limits
-            for (let i = 0; i < contentStr.length; i += CHUNK_SIZE) {
-                const chunk = contentStr.slice(i, i + CHUNK_SIZE);
-                // Ensure we don't cut in the middle of a word
-                const lastSpace = chunk.lastIndexOf(' ');
-                chunks.push(chunk.slice(0, lastSpace));
-                
-                // Add the remainder to the next chunk
-                if (lastSpace < chunk.length) {
-                    i -= (chunk.length - lastSpace);
-                }
-            }
-
-            // Create a new object without the original content field
-            const baseDoc = { ...doc };
-            delete baseDoc.content;
-
-            return {
-                ...baseDoc,
-                'URL': result.newUrl,
-                'Original URL': doc.Link,
-                'Title': result.metadata?.title || '',
-                'Summary': chunks[0]?.slice(0, 1000) || '',
-                'Content_': chunks[0] || '',
-                'Content_2': chunks[1] || '',
-                'Content_3': chunks[2] || '',
-                'Content_4': chunks[3] || '',
-                'Content_5': chunks[4] || '',
-                'Processing Status': 'Success',
-                'Last Updated': new Date().toISOString(),
-                'Content Length': contentStr.length,
-                'Total Chunks': chunks.length,
-                'Language': result.metadata?.language || 'en',
-                'Source': result.metadata?.source || ''
-            };
-        });
+    _prepareExcelUpdate(results) {
+        console.log('\n🔍 Preparing Excel Update');
+        
+        return results.map(result => ({
+            [EXCEL_SCHEMA.DOCUMENT_NAME]: result[EXCEL_SCHEMA.DOCUMENT_NAME],
+            [EXCEL_SCHEMA.TITLE]: result[EXCEL_SCHEMA.TITLE],
+            [EXCEL_SCHEMA.URL]: result[EXCEL_SCHEMA.URL],
+            [EXCEL_SCHEMA.STATUS]: result[EXCEL_SCHEMA.STATUS],
+            ...EXCEL_SCHEMA.CONTENT_PARTS.reduce((acc, part) => {
+                acc[part] = result[part] || '';
+                return acc;
+            }, {}),
+            [EXCEL_SCHEMA.TOTAL_LENGTH]: result[EXCEL_SCHEMA.TOTAL_LENGTH],
+            [EXCEL_SCHEMA.LANGUAGE]: result[EXCEL_SCHEMA.LANGUAGE],
+            [EXCEL_SCHEMA.SOURCE_URL]: result[EXCEL_SCHEMA.SOURCE_URL],
+            [EXCEL_SCHEMA.LAST_UPDATED]: new Date().toISOString()
+        }));
     }
 
     _extractSections(content) {
@@ -176,8 +166,12 @@ export default class AFDocManager {
      * @private
      */
     _generateSummary(results) {
-        const successful = results.filter(r => r.success);
-        const failed = results.filter(r => !r.success);
+        const successful = results.filter(r => 
+            r[EXCEL_SCHEMA.STATUS] === CONSTANTS.SUCCESS_STATUS
+        );
+        const failed = results.filter(r => 
+            r[EXCEL_SCHEMA.STATUS] !== CONSTANTS.SUCCESS_STATUS
+        );
 
         return {
             total: results.length,
@@ -193,7 +187,7 @@ export default class AFDocManager {
      */
     _aggregateFailures(failedResults) {
         return failedResults.reduce((acc, result) => {
-            const reason = result.error || 'Unknown error';
+            const reason = result[EXCEL_SCHEMA.STATUS].replace(CONSTANTS.ERROR_STATUS_PREFIX, '') || 'Unknown error';
             acc[reason] = (acc[reason] || 0) + 1;
             return acc;
         }, {});
